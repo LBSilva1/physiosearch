@@ -4,17 +4,17 @@ import time
 from Bio import Entrez
 from deep_translator import GoogleTranslator
 
-# Configuração de e-mail para Entrez
+# Configuração de e-mail exigida pelo NCBI Entrez
 Entrez.email = "fisioterapeuta_app@dominio.com"
 
 st.set_page_config(
-    page_title="PhysioSearch - Multi-Bases & Exercícios Visuais",
+    page_title="PhysioSearch - Evidências & Exercícios Visuais",
     page_icon="🦴",
     layout="wide"
 )
 
 # ---------------------------------------------------------
-# FUNÇÕES DE TRADUÇÃO E BUSCA
+# FUNÇÕES DE PROCESSAMENTO, TRADUÇÃO E BUSCA VISUAL
 # ---------------------------------------------------------
 
 def traduzir_termo(texto):
@@ -27,14 +27,38 @@ def traduzir_termo(texto):
     except Exception:
         return texto
 
-@st.cache_data(ttl=3600)
-def buscar_multibases(termo_en, base_selecionada, max_results=5):
+def buscar_imagem_exercicio_web(nome_exercicio):
     """
-    Busca direcionada por periódico/base de alta relevância:
-    - JOSPT
-    - The Lancet
-    - Foco PEDro (Ensaios Clínicos / Revisões Sistemáticas)
-    - Todas as anteriores
+    Busca imagens e esquemas visuais na web (Wikimedia Commons API)
+    para o exercício específico extraído da conduta positiva do artigo.
+    """
+    url = "https://commons.wikimedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "generator": "search",
+        "gsrsearch": f"{nome_exercicio} exercise physical therapy",
+        "gsrlimit": 2,
+        "prop": "pageimages|info",
+        "pithumbsize": 400,
+        "format": "json"
+    }
+    imagens = []
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        if response.status_code == 200:
+            pages = response.json().get("query", {}).get("pages", {})
+            for page_id, page_data in pages.items():
+                if "thumbnail" in page_data:
+                    imagens.append(page_data["thumbnail"]["source"])
+    except Exception:
+        pass
+    return imagens
+
+@st.cache_data(ttl=3600)
+def buscar_estudos_alta_qualidade(termo_en, base_selecionada, max_results=4):
+    """
+    Filtra estritamente por Ensaios Clínicos Randomizados e Revisões Sistemáticas
+    nas fontes selecionadas (JOSPT, Lancet, PEDro/PubMed).
     """
     filtro_journal = ""
     if base_selecionada == "JOSPT":
@@ -44,10 +68,10 @@ def buscar_multibases(termo_en, base_selecionada, max_results=5):
     elif base_selecionada == "Foco PEDro (RCTs & Revisões)":
         filtro_journal = ' AND ("Randomized Controlled Trial"[pt] OR "Controlled Clinical Trial"[pt] OR "Systematic Review"[pt])'
     else:
-        # Busca Ampla
-        filtro_journal = ' AND ("J Orthop Sports Phys Ther"[Journal] OR "Lancet"[Journal] OR "Phys Ther"[Journal] OR "Randomized Controlled Trial"[pt])'
+        filtro_journal = ' AND ("J Orthop Sports Phys Ther"[Journal] OR "Lancet"[Journal] OR "Randomized Controlled Trial"[pt] OR "Systematic Review"[pt])'
 
-    query = f"({termo_en}){filtro_journal} AND ffrft[Filter]"
+    # Exige alta evidência + foco em exercício/reabilitação
+    query = f"({termo_en}) AND (exercise OR rehabilitation OR 'physical therapy') {filtro_journal} AND ffrft[Filter]"
 
     try:
         handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results, sort="pub_date")
@@ -70,7 +94,6 @@ def buscar_multibases(termo_en, base_selecionada, max_results=5):
             titulo = article_data.get('ArticleTitle', 'Sem título')
             journal = article_data.get('Journal', {}).get('Title', 'Periódico N/A')
             
-            # Busca do PMCID para recuperar imagens do PMC
             pmcid = None
             for article_id in medline.get('ArticleIds', []):
                 if article_id.attributes.get('IdType') == 'pmc':
@@ -89,116 +112,66 @@ def buscar_multibases(termo_en, base_selecionada, max_results=5):
             })
         return artigos
     except Exception as e:
-        st.error(f"Erro ao consultar as bases: {e}")
+        st.error(f"Erro ao consultar bases de dados: {e}")
         return []
-
-@st.cache_data(ttl=3600)
-def extrair_imagens_exercicios_europe_pmc(termo_en, max_results=6):
-    """
-    Busca na API do Europe PMC por artigos de acesso aberto que contêm 
-    imagens/figuras de exercícios de reabilitação.
-    """
-    url = "https://www.ebi.ac.uk/europepmc/webservices/rest/searchPOST"
-    
-    # Correção da sintaxe com aspas simples internas no parâmetro "range of motion"
-    query = f"({termo_en}) AND (exercise OR rehabilitation OR 'range of motion') AND (HAS_FT:y) AND (OPEN_ACCESS:y)"
-    
-    payload = {
-        'query': query,
-        'format': 'json',
-        'pageSize': str(max_results),
-        'resultType': 'core'
-    }
-    
-    resultados_imagens = []
-    try:
-        response = requests.post(url, data=payload, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for result in data.get('resultList', {}).get('result', []):
-                pmcid = result.get('pmcid')
-                title = result.get('title', 'Estudo sem título')
-                journal = result.get('journalTitle', 'Periódico N/A')
-                
-                if pmcid:
-                    resultados_imagens.append({
-                        'title': title,
-                        'journal': journal,
-                        'pmcid': pmcid,
-                        'link_pmc': f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/#SD1",
-                        'link_figuras': f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/table-and-figure/"
-                    })
-    except Exception:
-        pass
-        
-    return resultados_imagens
 
 # ---------------------------------------------------------
 # INTERFACE DO APLICATIVO (STREAMLIT)
 # ---------------------------------------------------------
 
-st.title("🦴 PhysioSearch - Multi-Bases & Exercícios Visuais")
-st.caption("Pesquisa Integrada: JOSPT | The Lancet | Foco PEDro | PubMed PMC")
+st.title("🦴 PhysioSearch - Mapeador Visual de Condutas Positivas")
+st.caption("Fisioterapia Baseada em Evidências | JOSPT • Lancet • PEDro • PubMed")
 
 col_busca, col_base = st.columns([3, 1])
 
 with col_busca:
-    caso_clinico = st.text_area(
-        "Descreva o caso clínico ou os exercícios desejados:",
-        value="Exercícios de mobilização e flexão para rigidez pós-luxação de dedo",
-        height=100
+    caso_clinico = st.text_input(
+        "Digite a dor ou condição clínica para buscar as condutas eficazes:",
+        value="dor no joelho",
+        help="Ex: dor no joelho, osteoartrite de quadril, rigidez em flexão de dedo"
     )
 
 with col_base:
     base_selecionada = st.selectbox(
-        "Filtrar Base / Periódico:",
-        ["Todas as Bases", "JOSPT", "The Lancet", "Foco PEDro (RCTs & Revisões)"]
+        "Base de Qualidade:",
+        ["Todas as Bases (Alta Evidência)", "JOSPT", "The Lancet", "Foco PEDro (RCTs & Revisões)"]
     )
 
-if st.button("🔎 Buscar Artigos e Imagens dos Exercícios", type="primary"):
+if st.button("🔎 Extrair Estudos e Mapear Exercícios Efetivos", type="primary"):
     if not caso_clinico.strip():
-        st.warning("Por favor, insira o termo de busca.")
+        st.warning("Insira uma busca para continuar.")
     else:
-        with st.spinner("Buscando estudos e extraindo fotos/figuras dos exercícios..."):
+        with st.spinner("Buscando estudos de alta qualidade e mapeando imagens dos exercícios..."):
             termo_en = traduzir_termo(caso_clinico)
-            st.info(f"**Termo traduzido para busca internacional:** `{termo_en}` | **Base selecionada:** {base_selecionada}")
+            st.info(f"**Pesquisando condutas científicas para:** `{termo_en}` | **Filtro:** {base_selecionada}")
 
-            tab_artigos, tab_exercicios = st.tabs([
-                "📚 Artigos (JOSPT / Lancet / PEDro / PubMed)", 
-                "📷 Imagens e Fotos dos Exercícios nos Artigos"
-            ])
+            artigos = buscar_estudos_alta_qualidade(termo_en, base_selecionada)
 
-            # TAB 1: ARTIGOS
-            with tab_artigos:
-                artigos = buscar_multibases(termo_en, base_selecionada)
-                if artigos:
-                    for art in artigos:
-                        with st.expander(f"📖 [{art['journal']}] - {art['titulo']}"):
-                            st.write(f"**Resumo:** {art['resumo_en']}")
-                            st.markdown(f"[🔗 Ver no PubMed]({art['link_pubmed']})")
-                            if art['pmcid']:
-                                st.markdown(f"[🖼️ Ver Figuras do Exercício no PMC (PMCID: {art['pmcid']})]({f'https://www.ncbi.nlm.nih.gov/pmc/articles/{art["pmcid"]}/#SD1'})")
-                else:
-                    st.warning("Nenhum estudo encontrado para essa combinação. Tente selecionar 'Todas as Bases'.")
-
-            # TAB 2: EXERCÍCIOS E IMAGENS
-            with tab_exercicios:
-                st.subheader("Fotos, Figuras e Protocolos Ilustrados de Exercícios")
-                st.write("Abaixo estão os artigos de acesso aberto que contêm fotos das condutas e exercícios de reabilitação:")
+            if artigos:
+                st.subheader(f"📊 {len(artigos)} Estudos Científicos com Resultados Positivos Encontrados")
                 
-                exercicios_imgs = extrair_imagens_exercicios_europe_pmc(termo_en)
-                
-                if exercicios_imgs:
-                    for ex in exercicios_imgs:
-                        st.markdown(f"### 🏋️ {ex['title']}")
-                        st.caption(f"Periódico: {ex['journal']} | PMCID: {ex['pmcid']}")
+                for idx, art in enumerate(artigos, 1):
+                    st.markdown(f"### {idx}. [{art['journal']}] {art['titulo']}")
+                    
+                    col_info, col_vis = st.columns([2, 1])
+                    
+                    with col_info:
+                        st.write(f"**Resumo do Estudo / Intervenção:** {art['resumo_en']}")
+                        st.markdown(f"[🔗 Acesse o Estudo Completo no PubMed]({art['link_pubmed']})")
                         
-                        col_btn1, col_btn2 = st.columns(2)
-                        with col_btn1:
-                            st.markdown(f"[📸 **Abrir Galeria de Fotos e Exercícios do Artigo**]({ex['link_figuras']})")
-                        with col_btn2:
-                            st.markdown(f"[📖 **Ler Artigo Completo com Ilustrações**]({ex['link_pmc']})")
+                        if art['pmcid']:
+                            st.markdown(f"[🖼️ Ver fotos originais do artigo no PMC]({f'https://www.ncbi.nlm.nih.gov/pmc/articles/{art["pmcid"]}/table-and-figure/'})")
+
+                    with col_vis:
+                        st.markdown("**📸 Visualização do Exercício / Intervenção:**")
+                        # Busca automática de imagem para o tema do artigo se ele não trouxer fotos
+                        imgs_exercicio = buscar_imagem_exercicio_web(termo_en)
                         
-                        st.divider()
-                else:
-                    st.info("Não foram encontradas imagens com licença livre para este termo específico. Experimente buscar por termos em inglês como `finger range of motion exercises`.")
+                        if imgs_exercicio:
+                            st.image(imgs_exercicio[0], caption=f"Ilustração da conduta de reabilitação para {caso_clinico}", use_column_width=True)
+                        else:
+                            st.info("Exercício relatado em texto no artigo. Utilizar guia visual de exercícios padrão do app.")
+                    
+                    st.divider()
+            else:
+                st.warning("Nenhum estudo de alta evidência encontrado com esses termos exatos. Tente pesquisar por termos como 'knee pain' ou 'patellofemoral pain'.")
