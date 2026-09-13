@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import xml.etree.ElementTree as ET
 import time
 from Bio import Entrez
 from deep_translator import GoogleTranslator
@@ -100,8 +99,9 @@ def extrair_imagens_exercicios_europe_pmc(termo_en, max_results=6):
     imagens/figuras de exercícios de reabilitação.
     """
     url = "https://www.ebi.ac.uk/europepmc/webservices/rest/searchPOST"
-    # Busca focada em protocolos de exercícios e reabilitação com figuras disponíveis
-    query = f"({termo_en}) AND (exercise OR rehabilitation OR "range of motion") AND (HAS_FT:y) AND (OPEN_ACCESS:y)"
+    
+    # Correção da sintaxe com aspas simples internas no parâmetro "range of motion"
+    query = f"({termo_en}) AND (exercise OR rehabilitation OR 'range of motion') AND (HAS_FT:y) AND (OPEN_ACCESS:y)"
     
     payload = {
         'query': query,
@@ -121,7 +121,6 @@ def extrair_imagens_exercicios_europe_pmc(termo_en, max_results=6):
                 journal = result.get('journalTitle', 'Periódico N/A')
                 
                 if pmcid:
-                    # Estrutura padrão de links de mídia/imagens do PubMed Central
                     resultados_imagens.append({
                         'title': title,
                         'journal': journal,
@@ -162,7 +161,7 @@ if st.button("🔎 Buscar Artigos e Imagens dos Exercícios", type="primary"):
     else:
         with st.spinner("Buscando estudos e extraindo fotos/figuras dos exercícios..."):
             termo_en = traduzir_termo(caso_clinico)
-            st.info(f"**Termo traduzido para busca internacional:** `{termo_en}` | **Base seleccionada:** {base_selecionada}")
+            st.info(f"**Termo traduzido para busca internacional:** `{termo_en}` | **Base selecionada:** {base_selecionada}")
 
             tab_artigos, tab_exercicios = st.tabs([
                 "📚 Artigos (JOSPT / Lancet / PEDro / PubMed)", 
